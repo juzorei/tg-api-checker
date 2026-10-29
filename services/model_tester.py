@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 
 import httpx
+from services.queued_http import QueuedClient
 
 from config import MAX_CONCURRENT_TESTS, TEST_TIMEOUT
 
@@ -23,6 +24,7 @@ class ModelTestResult:
     ok: bool
     status_code: int | None
     error_msg: str
+    protocol: str = 'chat'
 
 
 TEST_PROMPT: list[dict] = [{"role": "user", "content": "Hi"}]
@@ -33,6 +35,7 @@ async def test_models(
     api_key: str,
     model_ids: list[str],
     sample_size: int,
+    protocol: str = 'chat',
 ) -> list[ModelTestResult]:
     """Проверяет первые sample_size моделей параллельно.
 
@@ -47,8 +50,8 @@ async def test_models(
     """
     sample = model_ids[:sample_size]
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_TESTS)
-    async with httpx.AsyncClient(timeout=TEST_TIMEOUT) as client:
-        tasks = [_test_one(client, semaphore, base_url, api_key, mid) for mid in sample]
+    async with QueuedClient(timeout=TEST_TIMEOUT) as client:
+        tasks = [_test_one(client, semaphore, base_url, api_key, mid, protocol) for mid in sample]
         return list(await asyncio.gather(*tasks))
 
 
@@ -58,29 +61,43 @@ async def _test_one(
     base_url: str,
     api_key: str,
     model_id: str,
+    protocol: str = 'chat',
 ) -> ModelTestResult:
     """Один проб chat completion с ограничением параллельности."""
     async with semaphore:
         try:
-            r = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={"model": model_id, "messages": TEST_PROMPT, "max_tokens": 5},
-            )
-            ok = r.status_code == 200
+            from services.protocols import request_spec, response_text
+            from config import MAX_OUTPUT_TOKENS
+            url, headers, payload = request_spec(base_url, api_key, model_id, protocol, MAX_OUTPUT_TOKENS)
+            r = await client.post(url, headers=headers, json=payload)
+            ok = False
             err = ""
-            if not ok:
-                try:
-                    body = r.json()
-                    err = str(body.get("error", {}).get("message", ""))[:80]
-                except Exception:
-                    err = ""
+            try:
+                body = r.json()
+                if r.status_code == 200:
+                    content = response_text(body, protocol)
+                    ok = isinstance(content, str) and bool(content.strip())
+                    if not ok:
+                        err = 'Пустой ответ: текст не получен (возможен малый лимит генерации)'
+                else:
+                    error = body.get('error', body)
+                    if isinstance(error, dict):
+                        err = ' · '.join(str(error[k]) for k in ('code', 'type', 'message', 'detail', 'reason') if error.get(k))
+                        if not err:
+                            err = 'Сервер не указал причину в стандартных полях ошибки'
+                    else:
+                        err = str(error)
+            except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+                err = 'Некорректный JSON или структура ответа' if r.status_code == 200 else 'Ответ сервера не в формате JSON'
+            err = err.replace(api_key, '[ключ скрыт]')[:160]
+            if r.status_code == 429 and r.headers.get('retry-after'):
+                err += ' · Retry-After: ' + r.headers['retry-after'][:30]
             return ModelTestResult(
-                model_id=model_id, ok=ok, status_code=r.status_code, error_msg=err
+                model_id=model_id, ok=ok, status_code=r.status_code, error_msg=err, protocol=protocol
             )
         except httpx.TimeoutException:
             return ModelTestResult(model_id=model_id, ok=False, status_code=None, error_msg="timeout")
-        except Exception as e:
-            return ModelTestResult(
-                model_id=model_id, ok=False, status_code=None, error_msg=str(e)[:80]
-            )
+        except httpx.ConnectError:
+            return ModelTestResult(model_id, False, None, 'Ошибка соединения (DNS/TLS/сервер недоступен)')
+        except httpx.HTTPError:
+            return ModelTestResult(model_id, False, None, 'Сетевая ошибка при чтении ответа')

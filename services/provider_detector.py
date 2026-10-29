@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import httpx
+from services.queued_http import QueuedClient
 
 from config import DETECT_TIMEOUT, KNOWN_PROVIDERS
 
@@ -27,21 +28,11 @@ class DetectionResult:
 
 
 async def detect_by_key(api_key: str) -> DetectionResult:
-    """Пробует известные эндпоинты, пока /models не вернёт 200."""
-    async with httpx.AsyncClient(timeout=DETECT_TIMEOUT) as client:
-        for base_url, provider_name in KNOWN_PROVIDERS:
-            models = await _fetch_models(client, base_url, api_key)
-            if models is not None:
-                return DetectionResult(
-                    base_url=base_url,
-                    provider_name=provider_name,
-                    key_type=infer_key_type(api_key, models),
-                    models=models,
-                )
+    """Не отправляет ключ неизвестного происхождения сторонним провайдерам."""
     return DetectionResult(
         base_url="",
         provider_name="Unknown",
-        error="Не удалось определить провайдера по ключу.",
+        error="Пришли base URL вместе с ключом. По одному ключу надёжно определить сервер нельзя; публичный каталог не подтверждает доступ.",
     )
 
 
@@ -52,13 +43,21 @@ async def fetch_at(base_url: str, api_key: str) -> DetectionResult:
     """
     base_url = base_url.rstrip("/")
     provider_name = base_url.split("//", 1)[-1].split("/", 1)[0]
-    async with httpx.AsyncClient(timeout=DETECT_TIMEOUT) as client:
-        models = await _fetch_models(client, base_url, api_key)
+    async with QueuedClient(timeout=DETECT_TIMEOUT) as client:
+        from services.protocol_detect import native_catalog
+        native_models, native_error = await native_catalog(client, base_url, api_key)
+        models = native_models if native_models else await _fetch_models(client, base_url, api_key)
+    if models is None and native_error:
+        return DetectionResult(
+            base_url=base_url,
+            provider_name=provider_name,
+            error=native_error + '. Это не доказывает, что ключ нерабочий.',
+        )
     if models is None:
         return DetectionResult(
             base_url=base_url,
             provider_name=provider_name,
-            error="Ключ не подошёл к этому base URL (/models не вернул 200).",
+            error="Не удалось прочитать каталог /models. Это не доказывает, что ключ нерабочий: каталог может отсутствовать или быть недоступен.",
         )
     return DetectionResult(
         base_url=base_url,

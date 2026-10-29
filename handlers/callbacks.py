@@ -10,6 +10,57 @@ from services.formatters import format_models_page
 router = Router()
 
 
+@router.callback_query(F.data.regexp(r"^(diagpick|diagrun|limits):"))
+async def handle_diagnostics(callback: CallbackQuery) -> None:
+    import httpx
+    from services.diagnostics import diagnose, limits
+
+    if not isinstance(callback.message, Message):
+        await callback.answer("Сообщение недоступно.")
+        return
+    try:
+        action, owner, number = callback.data.split(":")
+        uid, index = int(owner), int(number)
+    except (ValueError, AttributeError):
+        await callback.answer("Некорректная кнопка.")
+        return
+    saved = last_check.get(uid)
+    if uid != callback.from_user.id or not saved:
+        await callback.answer("Чек недоступен. Пришли ключ заново.", show_alert=True)
+        return
+    if saved.get("busy"):
+        await callback.answer("Проверка уже выполняется.")
+        return
+    await callback.answer()
+    models = saved["models"]
+    if action == "diagpick":
+        page = max(0, min(index, max(0, (len(models) - 1) // 10)))
+        rows = [[InlineKeyboardButton(text=m[:50], callback_data=f"diagrun:{uid}:{i}")] for i, m in enumerate(models) if page * 10 <= i < (page + 1) * 10]
+        nav = []
+        if page:
+            nav.append(InlineKeyboardButton(text="◀", callback_data=f"diagpick:{uid}:{page - 1}"))
+        if (page + 1) * 10 < len(models):
+            nav.append(InlineKeyboardButton(text="▶", callback_data=f"diagpick:{uid}:{page + 1}"))
+        nav.append(InlineKeyboardButton(text="К отчёту", callback_data=f"back:{uid}"))
+        rows.append(nav)
+        await callback.message.edit_text("Выбери модель. Нажатие запускает 3 потенциально платных запроса (до 128 выходных токенов каждый). Это диагностика возможностей, не доказательство подлинности.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        return
+    if action == "diagrun" and not 0 <= index < len(models):
+        await callback.message.answer("Модель не найдена.")
+        return
+    saved["busy"] = True
+    try:
+        progress = await callback.message.answer("⏳ Получаю результаты…")
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+            if action == "limits":
+                text = await limits(client, saved["base_url"], saved["key"])
+            else:
+                text = await diagnose(client, saved["base_url"], saved["key"], models[index])
+        await progress.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="К отчёту", callback_data=f"back:{uid}")]]))
+    finally:
+        saved.pop("busy", None)
+
+
 @router.callback_query(F.data.startswith("recheck:"))
 async def handle_recheck(callback: CallbackQuery) -> None:
     """Повторяет последний чек: заново детект + пробы."""

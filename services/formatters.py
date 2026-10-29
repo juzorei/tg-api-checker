@@ -12,8 +12,9 @@ _ERROR_LABELS: dict[int, str] = {
     402: "недостаточно средств",
     403: "доступ ограничен",
     404: "модель не найдена",
-    422: "слишком большой запрос",
-    429: "лимит запросов",
+    422: "неподдерживаемые параметры запроса",
+    423: "Locked — сервер заблокировал запрос; причина зависит от провайдера",
+    429: "ограничение частоты или квоты",
 }
 
 
@@ -25,6 +26,8 @@ def short_error(status: int | None, msg: str) -> str:
         return "ошибка сервера"
     if status is None:
         return "таймаут" if ("timeout" in msg.lower() or "timed out" in msg.lower()) else "сбой сети"
+    if status == 200:
+        return "HTTP 200 без корректного текста модели"
     return f"ошибка {status}"
 
 
@@ -35,6 +38,8 @@ def format_check_result(
     base_url: str,
     total_models: int,
     results: list[ModelTestResult],
+    limits_text: str = "не раскрываются сервером",
+    skipped_count: int = 0,
 ) -> str:
     """Собирает главный отчёт в стиле скрина (HTML).
 
@@ -57,54 +62,53 @@ def format_check_result(
     lines: list[str] = [
         f"🔑 Чек API — <b>{esc(provider_name)}</b>",
         "",
-        f"<code>{esc(api_key)}</code>",
+        f"🌐 Base URL: <code>{esc(base_url)}</code>",
+        f"🔑 Ключ: <code>{esc(api_key)}</code>",
         "",
-        "📋 Описание:",
-        f"▪️ Провайдер: {provider_domain}",
-        f"▪️ Тип ключа: {esc(key_type)}",
-        "▪️ План: —",
+        f"💳 Лимиты: {esc(limits_text)}",
         "",
-        f"📦 Доступно моделей ({total_models}):",
-        f"<code>{esc(_preview_models(results, total_models))}</code>",
+        f"📦 Ответившие модели ({ok_count}):",
+        _preview_models([r for r in results if r.ok], ok_count) or "Ни одна из проверенных не ответила.",
         "",
         f"💬 Отвечают модели: {ok_count} из {tested}",
     ]
 
-    failing = [r for r in results if not r.ok]
-    for r in failing[:FAILING_LINES_LIMIT]:
-        icon = "🚫" if (r.status_code or 0) in (401, 403) else "❌"
-        lines.append(
-            f"{icon} {esc(r.model_id)} — {r.status_code or '—'} · "
-            f"{esc(short_error(r.status_code, r.error_msg))}"
-        )
-    if len(failing) > FAILING_LINES_LIMIT:
-        lines.append(f"… и ещё {len(failing) - FAILING_LINES_LIMIT} без ответа")
+    lines.append(f"В каталоге: {total_models} · не проверено: {max(0, total_models - skipped_count - tested)}")
+    if skipped_count:
+        lines.append(f"⏭ Пропущено фильтром: {skipped_count} · причины в «Пропущенные»")
+    from collections import Counter
 
-    lines += [
-        "",
-        "🌐 Основной эндпоинт:",
-        f"✅ {esc(base_url)}",
-        "",
-    ]
+    errors = Counter(
+        (r.status_code, (r.error_msg or short_error(r.status_code, '')).replace(api_key, '[ключ скрыт]'))
+        for r in results if not r.ok
+    )
+    if errors:
+        lines.extend(['', '⚠️ Причины ошибок:'])
+        for (status, reason), count in errors.most_common(4):
+            code = f'HTTP {status}' if status else 'сеть/таймаут'
+            lines.append(f'• {count} × {code}: {esc(reason[:160])}')
+        hidden = sum(errors.values()) - sum(count for _, count in errors.most_common(4))
+        if hidden:
+            lines.append(f'• Ещё {hidden} ошибок с другими причинами')
+
+    lines.append("")
 
     if ok_count > 0:
         status_line = f"🟢 ключ жив, модели отвечают · {tested} проб · {provider_domain}"
     else:
-        status_line = f"🟡 ключ жив, чат не ответил · {tested} проб · {provider_domain}"
+        status_line = f"🟡 Каталог получен, доступ к чату не подтверждён · {tested} проб"
     lines.append(status_line)
 
     return "\n".join(lines)
 
 
 def _preview_models(results: list[ModelTestResult], total: int) -> str:
-    """Превью списка моделей: первые ~5 ID, обрезанные по длине."""
-    ids = [r.model_id for r in results]
-    if not ids:
-        return ""
-    text = ",".join(ids[:5])
-    if total > 5:
-        text += ",…"
-    return text[:200]
+    """Превью с отдельным копируемым ID каждой модели."""
+    ids = [r.model_id for r in results[:10]]
+    lines = [f"<code>{html.escape(model_id)}</code>" for model_id in ids]
+    if total > len(ids):
+        lines.append(f"… ещё {total - len(ids)} — кнопка «Все модели»")
+    return "\n".join(lines)
 
 
 def format_models_page(provider_name: str, models: list[str], page: int, page_size: int) -> str:
@@ -116,6 +120,6 @@ def format_models_page(provider_name: str, models: list[str], page: int, page_si
     chunk = models[start : start + page_size]
 
     header = f"📋 {esc(provider_name)} — все модели ({len(models)})"
-    body = f"<code>{esc(', '.join(chunk))}</code>"
+    body = "\n".join(f"<code>{esc(model_id)}</code>" for model_id in chunk)
     footer = f"Стр. {page + 1} из {total_pages}"
     return f"{header}\n\n{body}\n\n{footer}"

@@ -1,4 +1,7 @@
 .env
+data/
+*.sqlite*
+*.key
 __pycache__/
 *.py[cod]
 .venv/
