@@ -12,9 +12,14 @@ from handlers.search import router as search_router
 
 
 async def main() -> None:
+    import logging.handlers
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.handlers.RotatingFileHandler("bot.log", maxBytes=2_000_000, backupCount=2, encoding="utf-8"),
+        ],
     )
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(storage=MemoryStorage())
