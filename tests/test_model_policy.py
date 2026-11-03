@@ -19,9 +19,13 @@ class ModelPolicyTests(unittest.TestCase):
         allowed, _ = select_models(['kimi-k3.9', 'kimi-k3.10'])
         self.assertEqual(allowed, ['kimi-k3.10'])
 
-    def test_unknown_names_and_other_families_retained(self):
+    def test_unknown_names_ret_new_rules_cut_excluded_families(self):
         catalog = ['custom-model', 'gpt-oss-120b', 'minimax-latest', 'kimi-latest', 'claude-latest', 'llama-3.1', 'qwen-2.5', 'deepseek-v3', 'provider/embedding-3', 'my-gpt-4-adapter']
-        self.assertEqual(select_models(catalog), (catalog, {}))
+        cut = ['llama-3.1', 'qwen-2.5', 'deepseek-v3', 'provider/embedding-3']
+        allowed, skipped = select_models(catalog)
+        self.assertEqual(allowed, ['custom-model', 'gpt-oss-120b', 'minimax-latest', 'kimi-latest', 'claude-latest', 'my-gpt-4-adapter'])
+        self.assertEqual(set(skipped), set(cut))
+        self.assertTrue(all(skipped.values()))
 
     def test_latest_is_relative_to_catalog(self):
         self.assertEqual(select_models(['minimax-m2.5']), (['minimax-m2.5'], {}))
