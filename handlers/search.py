@@ -40,7 +40,10 @@ async def find(message):
     groups = []
     omitted = 0
     for record in vault().list(uid):
-        eligible, skipped = select_models(record['result'].get('models', []))
+        if record['result'].get('filter_disabled', False):
+            eligible, skipped = list(record['result'].get('models', [])), {}
+        else:
+            eligible, skipped = select_models(record['result'].get('models', []))
         omitted += sum(matches(query, m) for m in skipped)
         models = [m for m in eligible if matches(query,m)]
         if models:
@@ -68,7 +71,10 @@ async def execute(message, token, uid):
     for rid, models in session['groups']:
         record = vault().get(uid, rid)
         if record:
-            eligible, _ = selected_subset(models, record['result'].get('models', []))
+            if record['result'].get('filter_disabled', False):
+                eligible = list(dict.fromkeys(models))
+            else:
+                eligible, _ = selected_subset(models, record['result'].get('models', []))
             if eligible:
                 groups.append((rid, eligible))
     session['groups'] = groups
@@ -90,7 +96,7 @@ async def execute(message, token, uid):
                 continue
             async def progress(count, size):
                 await edit(message, f'🔎 Проверено {done+count}/{total}', Keyboard(inline_keyboard=[[Button(text='Остановить', callback_data=f'stopsearch:{token}')]]))
-            jid = await run(vault(),uid,rid,models,record['result'].get('protocol','chat'),progress)
+            jid = await run(vault(),uid,rid,models,record['result'].get('protocol','chat'),progress, use_filter=not record['result'].get('filter_disabled', False))
             job = next(j for j in vault().jobs(uid, rid) if j['id'] == jid)
             for result in job['data']['results']:
                 session['results'].append(dict(rid=rid, url=record['url'], model=result['model_id'], ok=result['ok'], status=result.get('status_code'), error=result.get('error_msg', '').replace(record['key'], '[ключ скрыт]')))

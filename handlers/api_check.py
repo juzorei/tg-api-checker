@@ -41,39 +41,144 @@ async def handle_input(msg: Message) -> None:
         return
     uid = msg.from_user.id if msg.from_user else 0
 
+    if msg.chat.type != 'private':
+        return
+
     try:
-        base_url, api_key = parse_input(text)
+        pairs = parse_pairs(text)
     except ValueError:
+        # Ключ перед URL — прежний парсер принимает любой порядок
+        try:
+            base_url, api_key = parse_input(text)
+        except ValueError:
+            base_url = api_key = None
+        if base_url and api_key:
+            from handlers.history import single
+            await single(msg, uid, base_url, api_key)
+            return
         pending_base_url.pop(uid, None)
-        await msg.answer("Найдено несколько адресов или ключей. Пришли одну пару URL + ключ.")
-        return
-
-    # URL без ключа — запоминаем и ждём ключ следующим сообщением
-    if base_url and not api_key:
-        pending_base_url[uid] = base_url
-        await msg.answer("Теперь пришли API ключ для этого base URL.")
-        return
-
-    # Ключ без URL — подхватываем запомненный, если был
-    if api_key and not base_url and uid in pending_base_url:
-        base_url = pending_base_url.pop(uid)
-    elif uid in pending_base_url:
-        pending_base_url.pop(uid)
-
-    if not api_key:
         await msg.answer(
-            "⚠️ Не понял ввод. Пришли API ключ (sk-...) или "
-            "<code>https://base.url/v1 ключ</code> одной строкой."
+            "Не удалось однозначно сопоставить адреса и ключи. "
+            "Пришли пары URL + ключ, каждую с новой строки."
         )
         return
 
-    if msg.chat.type != 'private':
+    if not pairs:
+        # Ключ без URL или нераспознанный ввод — прежняя логика
+        try:
+            base_url, api_key = parse_input(text)
+        except ValueError:
+            pending_base_url.pop(uid, None)
+            await msg.answer("Найдено несколько адресов или ключей. Пришли одну пару URL + ключ.")
+            return
+        if base_url and not api_key:
+            pending_base_url[uid] = base_url
+            await msg.answer("Теперь пришли API ключ для этого base URL.")
+            return
+        if api_key and not base_url and uid in pending_base_url:
+            base_url = pending_base_url.pop(uid)
+        elif uid in pending_base_url:
+            pending_base_url.pop(uid)
+        if not api_key:
+            await msg.answer(
+                "⚠️ Не понял ввод. Пришли API ключ (sk-...) или "
+                "<code>https://base.url/v1 ключ</code> одной строкой."
+            )
+            return
+        if not base_url:
+            await msg.answer('Пришли base URL вместе с ключом.')
+            return
+        from handlers.history import single
+        await single(msg, uid, base_url, api_key)
         return
-    if not base_url:
-        await msg.answer('Пришли base URL вместе с ключом.')
+
+    if len(pairs) == 1 and pairs[0][1] is None:
+        pending_base_url[uid] = pairs[0][0]
+        await msg.answer("Теперь пришли API ключ для этого base URL.")
         return
-    from handlers.history import single
-    await single(msg, uid, base_url, api_key)
+
+    pending_base_url.pop(uid, None)
+    if len(pairs) == 1:
+        from handlers.history import single
+        await single(msg, uid, pairs[0][0], pairs[0][1])
+        return
+
+    from handlers.history import start_batch
+    await start_batch(msg, uid, pairs)
+
+
+def parse_pairs(text: str) -> list[tuple[str, str | None]]:
+    """Извлекает все пары (base_url, api_key) из сообщения.
+
+    URL и ключи связываются по порядку появления: каждый URL забирает
+    ближайший следующий за ним ключ. Возвращает [] если URL нет вовсе,
+    [(url, None)] если URL один и ключа нет.
+    """
+    url_pattern = r'https?://[^\s<>"\'`\]\[{}()]+'
+    bare_pattern = r'''(?<![\w@./-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}\b(?::[0-9]{1,5})?(?:/[^\s<>"'`\]\[{}()]*)?'''
+    prefixed = r'(?<![\w-])(?:sk[-_]|nvapi-|vl-|gsk_|AIza|r8_)[A-Za-z0-9_-]{6,}(?![\w-])'
+    labeled = r'''(?:api[_ -]?key|ключ|token|bearer)\b[\s"':=«»`]*([A-Za-z0-9_./+=-]{8,})'''
+    emoji = r'🔑[\s`"\':]*([A-Za-z0-9_./+=-]{8,})'
+
+    lines = text.splitlines()
+    explicit = any(re.search(url_pattern, line, re.I) for line in lines)
+    entries: list[tuple[int, int, str, str]] = []
+    for idx, line in enumerate(lines):
+        masked = re.sub(url_pattern, lambda m: ' ' * len(m.group(0)), line, flags=re.I)
+        if not explicit:
+            masked = re.sub(bare_pattern, lambda m: ' ' * len(m.group(0)), masked, flags=re.I)
+        for m in re.finditer(url_pattern, line, re.I):
+            entries.append((idx, m.start(), 'url', m.group(0).rstrip('.,;!')))
+        if not explicit:
+            for m in re.finditer(bare_pattern, line, re.I):
+                entries.append((idx, m.start(), 'url', 'https://' + m.group(0).rstrip('.,;!')))
+        for m in re.finditer(prefixed, masked):
+            entries.append((idx, m.start(), 'key', m.group(0)))
+        for m in re.finditer(labeled, masked, re.I):
+            entries.append((idx, m.start(), 'key', m.group(1).rstrip('.,;!')))
+        for m in re.finditer(emoji, masked):
+            entries.append((idx, m.start(), 'key', m.group(1)))
+        if re.search(url_pattern, line, re.I) or (not explicit and re.search(bare_pattern, line, re.I)):
+            token = masked.strip().strip('"\'`')
+            if re.fullmatch(r'[A-Za-z0-9_./+=-]{16,}', token) and '://' not in token:
+                entries.append((idx, len(line), 'key', token))
+    url_lines = {e[0] for e in entries if e[2] == 'url'}
+    for idx, line in enumerate(lines):
+        if idx - 1 in url_lines:
+            token = line.strip().strip('"\'`')
+            if re.fullmatch(r'[A-Za-z0-9_./+=-]{16,}', token) and '://' not in token:
+                entries.append((idx, 0, 'key', token))
+    seen: set[tuple[int, str, str]] = set()
+    unique: list[tuple[int, int, str, str]] = []
+    for entry in entries:
+        marker = (entry[0], entry[2], entry[3])
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique.append(entry)
+    entries = unique
+    entries.sort(key=lambda e: (e[0], e[1]))
+    urls = [e for e in entries if e[2] == 'url']
+    keys = [e for e in entries if e[2] == 'key']
+    if not urls:
+        return []
+    pairs: list[tuple[str, str | None]] = []
+    used: set[int] = set()
+    for u in urls:
+        match = next((k for k in keys if (k[0], k[1]) > (u[0], u[1]) and id(k) not in used), None)
+        if match:
+            used.add(id(match))
+            pairs.append((u[3], match[3]))
+        else:
+            pairs.append((u[3], None))
+    used_values = {k[3] for k in keys if id(k) in used}
+    if any(id(k) not in used and k[3] not in used_values for k in keys):
+        raise ValueError('Ключ без URL')
+    if len(pairs) == 1 and pairs[0][1] is None:
+        return pairs
+    if any(k is None for _, k in pairs):
+        raise ValueError('URL без ключа')
+    return list(dict.fromkeys(pairs))
 
 
 def parse_input(text: str) -> tuple[str | None, str | None]:

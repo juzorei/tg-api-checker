@@ -7,13 +7,16 @@ from services.model_tester import test_models
 active = {}
 
 
-async def run(vault, owner, rid, models, protocol, progress, resume=None):
+async def run(vault, owner, rid, models, protocol, progress, resume=None, use_filter=True):
     from config import MAX_MODELS_PER_RUN
     from services.model_policy import selected_subset
     record = vault.get(owner, rid)
     if not record:
         raise ValueError('Запись недоступна')
-    models, skipped = selected_subset(resume['data']['models'] if resume else models, record['result'].get('models', []))
+    if use_filter:
+        models, skipped = selected_subset(resume['data']['models'] if resume else models, record['result'].get('models', []))
+    else:
+        models, skipped = list(dict.fromkeys(resume['data']['models'] if resume else models)), {}
     if len(models) > MAX_MODELS_PER_RUN:
         raise ValueError(f'Превышен предел {MAX_MODELS_PER_RUN} моделей за запуск')
     identity = (owner, rid)

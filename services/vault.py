@@ -37,6 +37,13 @@ class Vault:
             self.db.execute('INSERT INTO records(owner,url,fingerprint,payload) VALUES(?,?,?,?) ON CONFLICT(owner,url,fingerprint) DO UPDATE SET payload=excluded.payload,updated=CURRENT_TIMESTAMP', (owner, url, fingerprint, payload))
         return self.db.execute('SELECT id FROM records WHERE owner=? AND url=? AND fingerprint=?', (owner, url, fingerprint)).fetchone()[0]
 
+    def find(self, owner, url, key):
+        """Находит запись по владельцу, URL и отпечатку ключа."""
+        url = url.rstrip('/')
+        fingerprint = hmac.new(self.secret, key.encode(), hashlib.sha256).hexdigest()
+        row = self.db.execute('SELECT id FROM records WHERE owner=? AND url=? AND fingerprint=?', (owner, url, fingerprint)).fetchone()
+        return self.get(owner, row[0]) if row else None
+
     def get(self, owner, record_id):
         row = self.db.execute('SELECT id,url,payload,note,created,updated FROM records WHERE owner=? AND id=?', (owner, record_id)).fetchone()
         if not row:

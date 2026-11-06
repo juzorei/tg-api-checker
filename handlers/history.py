@@ -27,9 +27,10 @@ def vault():
     return _vault
 
 
-def keyboard(rid):
+def keyboard(rid, filter_disabled=False):
     return Keyboard(inline_keyboard=[
         [Button(text='🔎 Проверить все модели', callback_data=f'h:fullask:{rid}')],
+        [Button(text='🔍 Фильтр: выкл' if filter_disabled else '🔍 Фильтр: вкл', callback_data=f'h:filter:{rid}')],
         [Button(text='Перепроверить', callback_data=f'h:check:{rid}'), Button(text='Все модели', callback_data=f'h:models:{rid}:0')],
         [Button(text='Диагностика', callback_data=f'h:pick:{rid}:0'), Button(text='Заметка', callback_data=f'h:note:{rid}')],
         [Button(text='Формат API', callback_data=f'h:protocol:{rid}'), Button(text='Продолжить', callback_data=f'h:resume:{rid}')],
@@ -47,14 +48,55 @@ async def edit(message, text, markup=None):
 
 
 async def execute(uid, url, key):
-    result = await check(url, key)
+    existing = vault().find(uid, url, key)
+    disabled = bool(existing and existing['result'].get('filter_disabled'))
+    result = await check(url, key, use_filter=not disabled)
+    if disabled:
+        result['filter_disabled'] = True
     return vault().save(uid, url, key, result)
 
 
 async def single(message, uid, url, key):
     progress = await message.reply('⏳ Проверяю…')
     rid = await execute(uid, url, key)
-    await edit(progress, report(vault().get(uid, rid)), keyboard(rid))
+    record = vault().get(uid, rid)
+    await edit(progress, report(record), keyboard(rid, record['result'].get('filter_disabled', False)))
+
+
+async def run_batch(message, uid, batch):
+    """Прогоняет собранные пары с одним сообщением прогресса."""
+    if batch['running'] or not batch['items']:
+        return
+    batch['running'] = True
+    try:
+        for url, key in batch['items']:
+            if batch['cancel']:
+                break
+            try:
+                batch['ids'].append(await execute(uid, url, key))
+            except Exception:
+                await edit(message, 'Пакет остановлен из-за внутренней ошибки. Выполненные проверки сохранены.')
+                raise
+            if not batch['cancel']:
+                await edit(message, f"⏳ Проверено {len(batch['ids'])}/{len(batch['items'])}", Keyboard(inline_keyboard=[[Button(text='Отмена', callback_data='h:cancel:0')]]))
+        if not batch['cancel']:
+            await show_list(message, uid, 0, ids=batch['ids'])
+    finally:
+        batch['running'] = False
+        batch['done'] = True
+        batch['items'] = []
+
+
+async def start_batch(message, uid, pairs):
+    """Запускает пакет из пар, присланных одним сообщением."""
+    pairs = list(dict.fromkeys(pairs))
+    if len(pairs) > 50:
+        await message.answer('Максимум 50 пар за пакет. Раздели на несколько сообщений.')
+        return
+    status = await message.reply(f'📦 Проверяю {len(pairs)} пар…')
+    batch = {'message': status, 'items': pairs, 'running': False, 'cancel': False, 'ids': []}
+    batches[uid] = batch
+    await run_batch(status, uid, batch)
 
 
 @router.message(Command('keys'))
@@ -69,7 +111,10 @@ async def show_list(message, uid, page, send=False, ids=None):
     lines = [f'📚 История: {len(records)} · страница {page+1}']
     rows = []
     for r in records[page*8:page*8+8]:
-        eligible, _ = select_models(r['result'].get('models', []))
+        if r['result'].get('filter_disabled', False):
+            eligible = list(r['result'].get('models', []))
+        else:
+            eligible, _ = select_models(r['result'].get('models', []))
         results = [x for x in r['result'].get('results', []) if x['model_id'] in eligible]
         good = sum(x['ok'] for x in results)
         total = len(results)
@@ -126,7 +171,15 @@ async def collect(message):
     batch = batches[uid]
     if batch['running']:
         return
-    from handlers.api_check import parse_input
+    from handlers.api_check import parse_input, parse_pairs
+    try:
+        pairs = parse_pairs(message.text)
+    except ValueError:
+        pairs = []
+    if len(pairs) > 1:
+        batches.pop(uid, None)
+        await start_batch(message, uid, pairs)
+        return
     try:
         url, key = parse_input(message.text)
     except ValueError:
@@ -165,27 +218,7 @@ async def callback(call):
                 batches.pop(uid, None)
             await edit(call.message, 'Пакет отменён.')
             return
-        if batch['running'] or not batch['items']:
-            return
-        batch['running'] = True
-        try:
-            for url, key in batch['items']:
-                if batch['cancel']:
-                    break
-                try:
-                    batch['ids'].append(await execute(uid, url, key))
-                except Exception:
-                    # Unexpected failures must remain visible without logging credentials.
-                    await edit(call.message, 'Пакет остановлен из-за внутренней ошибки. Выполненные проверки сохранены.')
-                    raise
-                if not batch['cancel']:
-                    await edit(call.message, f"⏳ Проверено {len(batch['ids'])}/{len(batch['items'])}", Keyboard(inline_keyboard=[[Button(text='Отмена', callback_data='h:cancel:0')]]))
-            if not batch['cancel']:
-                await show_list(call.message, uid, 0, ids=batch['ids'])
-        finally:
-            batch['running'] = False
-            batch['done'] = True
-            batch['items'] = []
+        await run_batch(call.message, uid, batch)
         return
     record = vault().get(uid, rid)
     if not record:
@@ -205,18 +238,26 @@ async def callback(call):
         if 0 <= page < len(PROTOCOLS):
             record['result']['protocol'] = PROTOCOLS[page]
             vault().save(uid, record['url'], record['key'], record['result'])
-            await edit(call.message, 'Формат: ' + PROTOCOLS[page], keyboard(rid))
+            await edit(call.message, 'Формат: ' + PROTOCOLS[page], keyboard(rid, record['result'].get('filter_disabled', False)))
         return
     if action == 'export':
         from aiogram.types import BufferedInputFile
-        eligible, _ = select_models(record['result'].get('models', []))
+        if record['result'].get('filter_disabled', False):
+            eligible = list(record['result'].get('models', []))
+        else:
+            eligible, _ = select_models(record['result'].get('models', []))
         text = '\n'.join(r['model_id'] for r in record['result'].get('results', []) if r['ok'] and r['model_id'] in eligible)
         await call.message.answer_document(BufferedInputFile(text.encode(), filename='working-models.txt'))
         return
     if action == 'runs':
         rows = vault().jobs(uid,rid)[:10]
         text = '\n'.join(f"{r['created']} · {r['state']} · {len(r['data']['results'])}/{len(r['data']['models'])}" for r in rows)
-        await edit(call.message, text or 'История запусков пока пуста.', keyboard(rid))
+        await edit(call.message, text or 'История запусков пока пуста.', keyboard(rid, record['result'].get('filter_disabled', False)))
+        return
+    if action == 'filter':
+        record['result']['filter_disabled'] = not record['result'].get('filter_disabled', False)
+        vault().save(uid, record['url'], record['key'], record['result'])
+        await edit(call.message, report(record), keyboard(rid, record['result']['filter_disabled']))
         return
     if action == 'delete':
         await edit(call.message, 'Удалить запись из истории?', Keyboard(inline_keyboard=[[Button(text='Удалить', callback_data=f'h:confirm:{rid}'), Button(text='Назад', callback_data=f'h:view:{rid}')]]))
@@ -230,10 +271,11 @@ async def callback(call):
         notes[uid] = rid
         await call.message.answer('Пришли заметку (до 120 символов), /cancel для отмены.')
     elif action == 'view':
-        await edit(call.message, report(record), keyboard(rid))
+        await edit(call.message, report(record), keyboard(rid, record['result'].get('filter_disabled', False)))
     elif action in ('models', 'pick', 'good', 'bad', 'untested', 'skipped'):
         models = record['result'].get('models', [])
-        eligible, skipped = select_models(models)
+        disabled = record['result'].get('filter_disabled', False)
+        eligible, skipped = (list(models), {}) if disabled else select_models(models)
         if action == 'skipped':
             models = list(skipped)
         elif action not in ('models', 'pick'):
@@ -275,7 +317,8 @@ async def callback(call):
         rows.append(nav)
         await edit(call.message, text, Keyboard(inline_keyboard=rows))
     elif action == 'fullask':
-        eligible, skipped = select_models(record['result'].get('models', []))
+        disabled = record['result'].get('filter_disabled', False)
+        eligible, skipped = (list(record['result'].get('models', [])), {}) if disabled else select_models(record['result'].get('models', []))
         await edit(call.message, f"Проверить все подходящие модели ({len(eligible)}, пропущено фильтром {len(skipped)} по сохранённому каталогу)? Каталог будет обновлён, фильтр применён заново. Один запрос на модель, до 128 выходных токенов. Проверка может быть платной и занять десятки минут.", Keyboard(inline_keyboard=[[Button(text='Запустить полный чек', callback_data=f'h:full:{rid}'), Button(text='Назад', callback_data=f'h:view:{rid}')]]))
     elif action in ('check', 'diag', 'full', 'resume', 'retry'):
         if (uid, rid) in busy:
@@ -299,34 +342,34 @@ async def callback(call):
                 if action == 'full':
                     detection = await fetch_at(record['url'], record['key'])
                     if detection.error:
-                        await edit(call.message, escape(detection.error), keyboard(rid))
+                        await edit(call.message, escape(detection.error), keyboard(rid, record['result'].get('filter_disabled', False)))
                         return
                     models = detection.models
                     record['result']['models'] = models
                     vault().save(uid, record['url'], record['key'], record['result'])
                 elif action == 'check':
-                    models = select_models(models)[0][:20]
+                    models = (models if record['result'].get('filter_disabled', False) else select_models(models)[0])[:20]
                 elif action == 'retry':
                     models = [r['model_id'] for r in record['result'].get('results', []) if not r['ok']]
                 else:
                     resume = next((j for j in vault().jobs(uid,rid) if j['state'] in ('stopped','interrupted','blocked')), None)
                     if not resume:
-                        await edit(call.message, 'Нет прерванной проверки.', keyboard(rid))
+                        await edit(call.message, 'Нет прерванной проверки.', keyboard(rid, record['result'].get('filter_disabled', False)))
                         return
-                await run(vault(), uid, rid, models, record['result'].get('protocol','chat'), progress, resume)
+                await run(vault(), uid, rid, models, record['result'].get('protocol','chat'), progress, resume, use_filter=not record['result'].get('filter_disabled', False))
                 text = report(vault().get(uid, rid))
             else:
                 models = record['result'].get('models', [])
                 if not 0<=page<len(models):
                     return
-                _, skipped = select_models(models)
+                _, skipped = (list(models), {}) if record['result'].get('filter_disabled', False) else select_models(models)
                 if models[page] in skipped:
-                    await edit(call.message, '⏭ ' + escape(skipped[models[page]]), keyboard(rid))
+                    await edit(call.message, '⏭ ' + escape(skipped[models[page]]), keyboard(rid, record['result'].get('filter_disabled', False)))
                     return
                 async with QueuedClient(timeout=30) as client:
                     text = await diagnose(client, record['url'], record['key'], models[page])
-            await edit(call.message, text, keyboard(rid))
+            await edit(call.message, text, keyboard(rid, record['result'].get('filter_disabled', False)))
         except ValueError as exc:
-            await edit(call.message, escape(str(exc)), keyboard(rid))
+            await edit(call.message, escape(str(exc)), keyboard(rid, record['result'].get('filter_disabled', False)))
         finally:
             busy.discard((uid,rid))

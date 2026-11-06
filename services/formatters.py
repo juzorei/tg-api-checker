@@ -40,6 +40,7 @@ def format_check_result(
     results: list[ModelTestResult],
     limits_text: str = "не раскрываются сервером",
     skipped_count: int = 0,
+    filter_disabled: bool = False,
 ) -> str:
     """Собирает главный отчёт в стиле скрина (HTML).
 
@@ -76,6 +77,8 @@ def format_check_result(
     lines.append(f"В каталоге: {total_models} · не проверено: {max(0, total_models - skipped_count - tested)}")
     if skipped_count:
         lines.append(f"⏭ Пропущено фильтром: {skipped_count} · причины в «Пропущенные»")
+    if filter_disabled:
+        lines.append("🔍 Фильтр версий отключён для этого ключа")
     from collections import Counter
 
     errors = Counter(

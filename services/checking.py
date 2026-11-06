@@ -11,12 +11,15 @@ from services.model_policy import select_models
 from asyncio import sleep  # тестируемая точка для патчей
 
 
-async def check(url, key, full=False, progress=None, protocol='chat'):
+async def check(url, key, full=False, progress=None, protocol='chat', use_filter=True):
     detection = await fetch_at(url, key)
     if detection.error or not detection.models:
         return {'error': detection.error or 'Каталог пуст', 'models': [], 'results': [], 'protocol': protocol}
     detection.models = list(dict.fromkeys(detection.models))
-    eligible, skipped = select_models(detection.models)
+    if use_filter:
+        eligible, skipped = select_models(detection.models)
+    else:
+        eligible, skipped = detection.models, {}
     probe = next(iter(eligible), None)
     if probe:
         async with QueuedClient(timeout=DETECT_TIMEOUT) as client:
@@ -57,6 +60,10 @@ def report(record):
     key = record['key']
     if result.get('error'):
         return f"🌐 <code>{escape(record['url'])}</code>\n🔑 <code>{escape(key)}</code>\n⚠️ {escape(result['error'])}"
-    eligible, skipped = select_models(result['models'])
+    disabled = result.get('filter_disabled', False)
+    if disabled:
+        eligible, skipped = list(result['models']), {}
+    else:
+        eligible, skipped = select_models(result['models'])
     results = [r for r in result['results'] if r['model_id'] in eligible]
-    return format_check_result(result['provider'], '', key, record['url'], len(eligible) + len(skipped), [ModelTestResult(**{k:v for k,v in r.items() if k in ModelTestResult.__dataclass_fields__}) for r in results], result.get('quota', 'не раскрыты'), skipped_count=len(skipped))
+    return format_check_result(result['provider'], '', key, record['url'], len(eligible) + len(skipped), [ModelTestResult(**{k:v for k,v in r.items() if k in ModelTestResult.__dataclass_fields__}) for r in results], result.get('quota', 'не раскрыты'), skipped_count=len(skipped), filter_disabled=disabled)
