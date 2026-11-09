@@ -15,4 +15,4 @@ class ThrottleTests(unittest.IsolatedAsyncioTestCase):
             await check('https://example.com/v1', 'fake')
         self.assertEqual(len(calls[0]), 10)
         self.assertTrue(all(len(chunk) == 1 for chunk in calls[1:]), calls)
-        self.assertEqual(len(calls), 11)
+        self.assertEqual(len(calls), 3)  # после 3 подряд 429 прогон останавливается

@@ -27,8 +27,11 @@ async def detect_protocol(client, base_url, key, model, preferred=None):
                     return protocol
             except (ValueError, TypeError, AttributeError, KeyError, IndexError):
                 pass
+        if response.status_code in (429, 423):
+            # Лимит не доказывает, что маршрут существует (шлюзы отвечают 429 и на 404)
+            continue
         if response.status_code not in _ROUTE_MISS and response.status_code not in (400, 415, 422):
-            # 401/403/402/429/423/5xx относятся к ключу или серверу — перебор не поможет
+            # 401/403/402/5xx относятся к ключу или серверу — перебор не поможет
             return protocol
     return 'chat'
 

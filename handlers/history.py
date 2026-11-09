@@ -40,11 +40,18 @@ def keyboard(rid, filter_disabled=False):
 
 
 async def edit(message, text, markup=None):
-    try:
-        await message.edit_text(text, reply_markup=markup)
-    except TelegramBadRequest as exc:
-        if 'message is not modified' not in str(exc).lower():
+    for attempt in range(4):
+        try:
+            await message.edit_text(text, reply_markup=markup)
+            return
+        except TelegramBadRequest as exc:
+            if 'message is not modified' in str(exc).lower():
+                return
             raise
+        except TelegramNetworkError:
+            if attempt == 3:
+                raise
+            await asyncio.sleep(2)
 
 
 async def execute(uid, url, key):

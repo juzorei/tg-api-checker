@@ -9,6 +9,17 @@ from html import escape
 from services.model_policy import select_models
 
 from asyncio import sleep  # тестируемая точка для патчей
+from urllib.parse import urlsplit
+
+
+def host_protocol(base_url):
+    """Известные нативные хосты определяют формат без зондирования."""
+    host = (urlsplit(base_url).hostname or '').lower()
+    if 'generativelanguage' in host or 'gemini' in host:
+        return 'gemini'
+    if 'anthropic.com' in host:
+        return 'anthropic'
+    return None
 
 
 async def check(url, key, full=False, progress=None, protocol='chat', use_filter=True):
@@ -20,11 +31,15 @@ async def check(url, key, full=False, progress=None, protocol='chat', use_filter
         eligible, skipped = select_models(detection.models)
     else:
         eligible, skipped = detection.models, {}
-    probe = next(iter(eligible), None)
-    if probe:
-        async with QueuedClient(timeout=DETECT_TIMEOUT) as client:
-            from services.protocol_detect import detect_protocol
-            protocol = await detect_protocol(client, detection.base_url, key, probe, preferred=protocol)
+    known = host_protocol(detection.base_url)
+    if known:
+        protocol = known
+    else:
+        probe = next(iter(eligible), None)
+        if probe:
+            async with QueuedClient(timeout=DETECT_TIMEOUT) as client:
+                from services.protocol_detect import detect_protocol
+                protocol = await detect_protocol(client, detection.base_url, key, probe, preferred=protocol)
     if full:
         results = []
         if progress:
@@ -39,6 +54,7 @@ async def check(url, key, full=False, progress=None, protocol='chat', use_filter
         results = []
         width = min(MAX_CONCURRENT_TESTS, len(sample)) if sample else 0
         position = 0
+        rate_limited = 0
         while position < len(sample):
             chunk = sample[position:position + width]
             position += len(chunk)
@@ -49,7 +65,13 @@ async def check(url, key, full=False, progress=None, protocol='chat', use_filter
                 break
             if any(r.status_code == 429 or r.status_code == 423 and 'concurrent' in r.error_msg.lower() for r in batch):
                 width = 1
+                rate_limited += 1
+                if rate_limited >= 3:
+                    # Сервер стабильно режет запросы — дальше ждать бессмысленно
+                    break
                 await sleep(5)
+            else:
+                rate_limited = 0
     async with QueuedClient(timeout=8) as client:
         quota = await limits_summary(client, url, key)
     return {'models': detection.models, 'skipped': skipped, 'results': [asdict(r) for r in results], 'provider': detection.provider_name, 'quota': quota, 'protocol': protocol}
