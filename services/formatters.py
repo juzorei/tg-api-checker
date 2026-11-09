@@ -81,15 +81,23 @@ def format_check_result(
         lines.append("🔍 Фильтр версий отключён для этого ключа")
     from collections import Counter
 
-    errors = Counter(
-        (r.status_code, (r.error_msg or short_error(r.status_code, '')).replace(api_key, '[ключ скрыт]'))
-        for r in results if not r.ok
-    )
+    errors = Counter()
+    for r in results:
+        if r.ok:
+            continue
+        label = short_error(r.status_code, r.error_msg)
+        detail = (r.error_msg or '').replace(api_key, '[ключ скрыт]')
+        if detail == label:
+            detail = ''
+        errors[(r.status_code, label, detail[:80])] += 1
     if errors:
         lines.extend(['', '⚠️ Причины ошибок:'])
-        for (status, reason), count in errors.most_common(4):
+        for (status, label, detail), count in errors.most_common(4):
             code = f'HTTP {status}' if status else 'сеть/таймаут'
-            lines.append(f'• {count} × {code}: {esc(reason[:160])}')
+            line = f'• {count} × {code}: {label}'
+            if detail:
+                line += f' · {detail}'
+            lines.append(esc(line))
         hidden = sum(errors.values()) - sum(count for _, count in errors.most_common(4))
         if hidden:
             lines.append(f'• Ещё {hidden} ошибок с другими причинами')

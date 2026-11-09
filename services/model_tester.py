@@ -88,7 +88,15 @@ async def _test_one(
                     else:
                         err = str(error)
             except (ValueError, KeyError, IndexError, TypeError, AttributeError):
-                err = 'Некорректный JSON или структура ответа' if r.status_code == 200 else 'Ответ сервера не в формате JSON'
+                if r.status_code == 200:
+                    err = 'Некорректный JSON или структура ответа'
+                else:
+                    # Прокси и балансировщики отвечают HTML/текстом — показываем фрагмент вместо «не JSON».
+                    # Вычищаем ключ ДО обрезки: иначе обрезанный фрагмент ключа уже не совпадёт с replace.
+                    raw = ' '.join(r.text.strip().split()[:64])
+                    if api_key:
+                        raw = raw.replace(api_key, '[ключ скрыт]')
+                    err = raw[:120] or 'Пустой ответ сервера'
             err = err.replace(api_key, '[ключ скрыт]')[:160]
             if r.status_code == 429 and r.headers.get('retry-after'):
                 err += ' · Retry-After: ' + r.headers['retry-after'][:30]
