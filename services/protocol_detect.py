@@ -39,8 +39,9 @@ async def native_catalog(client, base_url, key):
     host = base_url.split('//', 1)[-1].split('/', 1)[0].lower()
     try:
         if 'anthropic.com' in host:
+            path = '/models' if base_url.endswith('/v1') else '/v1/models'
             r = await client.get(
-                base_url + '/v1/models',
+                base_url + path,
                 headers={'x-api-key': key, 'anthropic-version': '2023-06-01'},
             )
             if r.status_code == 200:
@@ -48,8 +49,9 @@ async def native_catalog(client, base_url, key):
                 return [m['id'] for m in data if isinstance(m, dict) and m.get('id')], None
             return [], f'Anthropic /models: HTTP {r.status_code}'
         if 'generativelanguage' in host or 'gemini' in host:
+            path = '/models' if base_url.endswith('/v1beta') else '/v1beta/models'
             r = await client.get(
-                base_url + '/v1beta/models',
+                base_url + path,
                 headers={'x-goog-api-key': key},
             )
             if r.status_code == 200:

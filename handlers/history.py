@@ -4,7 +4,7 @@ from html import escape
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton as Button, InlineKeyboardMarkup as Keyboard
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from services.vault import Vault
 from services.checking import check, report
 from services.queued_http import QueuedClient
@@ -204,7 +204,11 @@ async def callback(call):
     except (ValueError, IndexError):
         await call.answer('Некорректная кнопка')
         return
-    await call.answer()
+    try:
+        await call.answer()
+    except TelegramNetworkError:
+        # Кнопка нажата, сеть моргнула — продолжаем обработку, чтобы отмена сработала
+        pass
     if action in ('page', 'bpage'):
         await show_list(call.message, uid, rid, ids=batches.get(uid, {}).get('ids', []) if action == 'bpage' else None)
         return
