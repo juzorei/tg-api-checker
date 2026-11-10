@@ -25,6 +25,7 @@ class DetectionResult:
     key_type: str = "PAYG"
     models: list[str] = field(default_factory=list)
     error: str | None = None
+    schemas: dict = field(default_factory=dict)
 
 
 async def detect_by_key(api_key: str) -> DetectionResult:
@@ -43,6 +44,18 @@ async def fetch_at(base_url: str, api_key: str) -> DetectionResult:
     """
     base_url = base_url.rstrip("/")
     provider_name = base_url.split("//", 1)[-1].split("/", 1)[0]
+    if "replicate.com" in provider_name.lower():
+        from services.replicate import list_models
+        async with QueuedClient(timeout=DETECT_TIMEOUT) as client:
+            models, schemas, error = await list_models(client, api_key)
+        if error:
+            return DetectionResult(base_url=base_url, provider_name="Replicate", error=error)
+        return DetectionResult(
+            base_url=base_url,
+            provider_name="Replicate",
+            models=models,
+            schemas=schemas,
+        )
     async with QueuedClient(timeout=DETECT_TIMEOUT) as client:
         from services.protocol_detect import native_catalog
         native_models, native_error = await native_catalog(client, base_url, api_key)

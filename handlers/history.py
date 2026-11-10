@@ -64,6 +64,11 @@ async def execute(uid, url, key):
 
 
 async def single(message, uid, url, key):
+    from services.host_policy import non_llm_reason
+    reason = non_llm_reason(url)
+    if reason:
+        await message.reply(f'⚠️ {reason}. Это не OpenAI-совместимый LLM API — проверять нечего. Ключ не сохранён.')
+        return
     progress = await message.reply('⏳ Проверяю…')
     rid = await execute(uid, url, key)
     record = vault().get(uid, rid)
@@ -75,10 +80,15 @@ async def run_batch(message, uid, batch):
     if batch['running'] or not batch['items']:
         return
     batch['running'] = True
+    from services.host_policy import non_llm_reason
     try:
         for url, key in batch['items']:
             if batch['cancel']:
                 break
+            reason = non_llm_reason(url)
+            if reason:
+                batch.setdefault('skipped', []).append((url, reason))
+                continue
             try:
                 batch['ids'].append(await execute(uid, url, key))
             except Exception:
@@ -88,6 +98,10 @@ async def run_batch(message, uid, batch):
                 await edit(message, f"⏳ Проверено {len(batch['ids'])}/{len(batch['items'])}", Keyboard(inline_keyboard=[[Button(text='Отмена', callback_data='h:cancel:0')]]))
         if not batch['cancel']:
             await show_list(message, uid, 0, ids=batch['ids'])
+            if batch.get('skipped'):
+                lines = [f'⏭ Пропущено (не LLM API): {len(batch["skipped"])}']
+                lines.extend(f'• {escape(url)} — {escape(reason)}' for url, reason in batch['skipped'][:10])
+                await message.answer('\n'.join(lines))
     finally:
         batch['running'] = False
         batch['done'] = True

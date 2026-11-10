@@ -33,6 +33,7 @@ if not 1 <= MAX_MODELS_PER_RUN <= 5000 or not 16 <= MAX_OUTPUT_TOKENS <= 4096:
 TEST_SAMPLE_SIZE: int = 20   # сколько моделей проверять чатом
 TEST_TIMEOUT: float = 15.0   # сек на один chat completion
 DETECT_TIMEOUT: float = 8.0  # сек на пробу одного эндпоинта
+REPLICATE_TIMEOUT: float = float(os.getenv("REPLICATE_TIMEOUT", "90"))
 MAX_CONCURRENT_TESTS: int = int(os.getenv("MAX_CONCURRENT_TESTS", "10"))
 if not 1 <= MAX_CONCURRENT_TESTS <= 20:
     raise ValueError("MAX_CONCURRENT_TESTS должен быть от 1 до 20")

@@ -31,6 +31,19 @@ async def check(url, key, full=False, progress=None, protocol='chat', use_filter
         eligible, skipped = select_models(detection.models)
     else:
         eligible, skipped = detection.models, {}
+    if detection.schemas:
+        # Replicate: predictions API, а не chat completions
+        from config import REPLICATE_TIMEOUT
+        from services.replicate import probe_many
+        sample = eligible if full else eligible[:TEST_SAMPLE_SIZE]
+        if progress:
+            await progress(0, len(sample))
+        async with QueuedClient(timeout=REPLICATE_TIMEOUT + 15) as client:
+            results = await probe_many(client, key, [(m, detection.schemas.get(m)) for m in sample], REPLICATE_TIMEOUT, progress)
+        async with QueuedClient(timeout=8) as client:
+            quota = await limits_summary(client, url, key)
+        return {'models': detection.models, 'skipped': skipped, 'results': [asdict(r) for r in results], 'provider': detection.provider_name, 'quota': quota, 'protocol': 'replicate'}
+
     known = host_protocol(detection.base_url)
     if known:
         protocol = known

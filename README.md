@@ -37,6 +37,8 @@ Have a stack of API keys from different LLM gateways and aggregators? The catalo
 
 ## Features
 
+- **Non-LLM hosts are refused up front** — Stripe, GitHub, Telegram and Hugging Face endpoints get a clear «not an OpenAI-compatible LLM API» reply, and their keys are **not stored** in history.
+- **Replicate support** — lists models via Replicate's own API, builds a minimal input from each model's `openapi_schema`, runs a prediction and polls it to completion (timeout `REPLICATE_TIMEOUT`, default 90 s). Models requiring file inputs are reported as not testable. Each probe is a real, potentially billed prediction.
 - **Paste anything** — a bare key, `URL + key`, a whole forwarded report from another checker, or **several pairs in one message** (URL/key per line). Multiple pairs run as a batch with one progress message and per-key reports. If addresses and keys cannot be matched one-to-one, the bot asks instead of sending your key to the wrong server. Schemeless URLs (`llmgateway.example/v1`) work.
 - **Model probes with real errors** — a 200 with empty text is not success; 401/403/423/429 each get a human-readable reason plus the server's own error message (key material redacted).
 - **Version gate before spending anything** — non-chat models (embeddings, rerank, TTS/ASR, image/video generation, moderation) are always skipped; Claude 5+, GPT 6+, Gemini 4+, Qwen 4+, DeepSeek 4+, GLM 5.3.x only; Llama and Grok families fully excluded; MiniMax/Kimi resolve to the newest version present in each catalog. Customizable in one file. Skipped models are listed with reasons, never silently dropped. **Per-key toggle** — the «🔍 Фильтр» button disables the gate for that one key (persisted in the encrypted record) and applies to every check of that key.
