@@ -18,8 +18,10 @@ _ERROR_LABELS: dict[int, str] = {
 }
 
 
-def short_error(status: int | None, msg: str) -> str:
+def short_error(status: int | None, msg: str, protocol: str | None = None) -> str:
     """Короткое описание ошибки для строки модели."""
+    if protocol == 'replicate':
+        return 'таймаут предсказания' if 'Не завершилась' in (msg or '') else 'предсказание не выполнено'
     low = (msg or '').lower()
     if 'not a chat model' in low or 'not supported in the v1/chat' in low:
         return "не чат-модель — нужен другой API (например, Responses/Realtime)"
@@ -88,7 +90,7 @@ def format_check_result(
     for r in results:
         if r.ok:
             continue
-        label = short_error(r.status_code, r.error_msg)
+        label = short_error(r.status_code, r.error_msg, r.protocol)
         detail = (r.error_msg or '').replace(api_key, '[ключ скрыт]')
         if detail == label:
             detail = ''

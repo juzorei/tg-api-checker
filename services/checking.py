@@ -35,7 +35,8 @@ async def check(url, key, full=False, progress=None, protocol='chat', use_filter
         # Replicate: predictions API, а не chat completions
         from config import REPLICATE_TIMEOUT
         from services.replicate import probe_many
-        sample = eligible if full else eligible[:TEST_SAMPLE_SIZE]
+        from config import MAX_MODELS_PER_RUN
+        sample = eligible[:MAX_MODELS_PER_RUN] if full else eligible[:TEST_SAMPLE_SIZE]
         if progress:
             await progress(0, len(sample))
         async with QueuedClient(timeout=REPLICATE_TIMEOUT + 15) as client:

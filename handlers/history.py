@@ -54,10 +54,10 @@ async def edit(message, text, markup=None):
             await asyncio.sleep(2)
 
 
-async def execute(uid, url, key):
+async def execute(uid, url, key, full=False):
     existing = vault().find(uid, url, key)
     disabled = bool(existing and existing['result'].get('filter_disabled'))
-    result = await check(url, key, use_filter=not disabled)
+    result = await check(url, key, full=full, use_filter=not disabled)
     if disabled:
         result['filter_disabled'] = True
     return vault().save(uid, url, key, result)
@@ -351,7 +351,11 @@ async def callback(call):
         busy.add((uid,rid))
         try:
             await edit(call.message, '⏳ Проверяю…')
-            if action in ('check', 'full', 'resume', 'retry'):
+            if action in ('check', 'full', 'resume', 'retry') and record['result'].get('protocol') == 'replicate':
+                # Replicate: predictions API, jobs.run не применим — перепроверяем целиком
+                await execute(uid, record['url'], record['key'], full=(action == 'full'))
+                text = report(vault().get(uid, rid))
+            elif action in ('check', 'full', 'resume', 'retry'):
                 from services.jobs import run
                 from services.provider_detector import fetch_at
                 import time
