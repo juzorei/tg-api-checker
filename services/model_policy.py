@@ -19,7 +19,7 @@ _PATTERNS = (
 # Не-чатовые модели: генерация/анализ аудио, изображений, видео, эмбеддинги и т.п.
 _NONCHAT = ('embedding', 'embed', 'rerank', 'tts', 'audio', 'speech', 'voice',
             'whisper', 'dall', 'image', 'imagen', 'sora', 'video', 'veo',
-            'moderation', 'guard')
+            'moderation', 'guard', 'realtime', 'live')
 
 # Семейства, исключённые полностью (Llama/Grok), и минимальные версии остальных.
 _EXCLUDE_ALL = {'Llama', 'Grok'}

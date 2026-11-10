@@ -20,6 +20,9 @@ _ERROR_LABELS: dict[int, str] = {
 
 def short_error(status: int | None, msg: str) -> str:
     """Короткое описание ошибки для строки модели."""
+    low = (msg or '').lower()
+    if 'not a chat model' in low or 'not supported in the v1/chat' in low:
+        return "не чат-модель — нужен другой API (например, Responses/Realtime)"
     if status in _ERROR_LABELS:
         return _ERROR_LABELS[status]
     if status is not None and status >= 500:

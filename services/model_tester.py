@@ -70,6 +70,16 @@ async def _test_one(
             from config import MAX_OUTPUT_TOKENS
             url, headers, payload = request_spec(base_url, api_key, model_id, protocol, MAX_OUTPUT_TOKENS)
             r = await client.post(url, headers=headers, json=payload)
+            if r.status_code == 400 and protocol == 'chat' and 'max_tokens' in r.text and 'unsupported' in r.text.lower():
+                # Новые модели OpenAI не принимают max_tokens — пробуем max_completion_tokens.
+                # Исходный 400 сохраняем, если повтор упал по сети или тоже вернул 400.
+                try:
+                    retry_url, retry_headers, retry_payload = request_spec(base_url, api_key, model_id, protocol, MAX_OUTPUT_TOKENS, token_param='max_completion_tokens')
+                    retry = await client.post(retry_url, headers=retry_headers, json=retry_payload)
+                except httpx.HTTPError:
+                    retry = None
+                if retry is not None and retry.status_code != 400:
+                    url, headers, payload, r = retry_url, retry_headers, retry_payload, retry
             ok = False
             err = ""
             try:

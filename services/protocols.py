@@ -3,11 +3,13 @@ from urllib.parse import quote
 PROTOCOLS = ('chat', 'responses', 'anthropic', 'gemini')
 
 
-def request_spec(base, key, model, protocol, tokens=128):
+def request_spec(base, key, model, protocol, tokens=128, token_param='max_tokens'):
     base = base.rstrip('/')
     headers = {'Authorization': f'Bearer {key}'}
     if protocol == 'chat':
-        return base + '/chat/completions', headers, {'model': model, 'messages': [{'role': 'user', 'content': 'Reply briefly: OK'}], 'max_tokens': tokens}
+        payload = {'model': model, 'messages': [{'role': 'user', 'content': 'Reply briefly: OK'}]}
+        payload[token_param] = tokens
+        return base + '/chat/completions', headers, payload
     if protocol == 'responses':
         return base + '/responses', headers, {'model': model, 'input': 'Reply briefly: OK', 'max_output_tokens': tokens}
     if protocol == 'anthropic':
